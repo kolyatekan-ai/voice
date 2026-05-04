@@ -1,31 +1,60 @@
 const express = require('express');
+const http = require('http');
+const { Server } = require('socket.io');
+
 const app = express();
-const http = require('http').Server(app);
-const io = require('socket.io')(http);
+const server = http.createServer(app);
+const io = new Server(server);
 
-// Папка для HTML файлов
-app.use(express.static('public'));
+app.use(express.static(__dirname));
 
+const rooms = {};
+
+// 🔌 ПОДКЛЮЧЕНИЕ
 io.on('connection', socket => {
-    // Когда кто-то заходит, добавляем его в общую комнату
-    socket.on('join-room', roomId => {
-        socket.join(roomId);
-        
-        // Сообщаем остальным, что появился новый участник
-        socket.to(roomId).emit('user-connected', socket.id);
 
-        socket.on('disconnect', () => {
-            socket.to(roomId).emit('user-disconnected', socket.id);
-        });
+    // 👥 ВХОД В КОМНАТУ
+    socket.on('join-room', room => {
+        socket.join(room);
+
+        if (!rooms[room]) rooms[room] = [];
+        rooms[room].push(socket.id);
+
+        // отправляем список уже подключенных
+        socket.emit('room-users', rooms[room].filter(id => id !== socket.id));
+
+        // уведомляем остальных
+        socket.to(room).emit('user-connected', socket.id);
+
+        socket.room = room;
     });
 
-    // Пересылка данных для настройки прямого WebRTC соединения
-    socket.on('offer', (userId, offer) => socket.to(userId).emit('offer', socket.id, offer));
-    socket.on('answer', (userId, answer) => socket.to(userId).emit('answer', socket.id, answer));
-    socket.on('candidate', (userId, candidate) => socket.to(userId).emit('candidate', socket.id, candidate));
+    // 📩 OFFER
+    socket.on('offer', (to, desc) => {
+        io.to(to).emit('offer', socket.id, desc);
+    });
+
+    // 📩 ANSWER
+    socket.on('answer', (to, desc) => {
+        io.to(to).emit('answer', socket.id, desc);
+    });
+
+    // 🧊 ICE
+    socket.on('candidate', (to, candidate) => {
+        io.to(to).emit('candidate', socket.id, candidate);
+    });
+
+    // ❌ ОТКЛЮЧЕНИЕ
+    socket.on('disconnect', () => {
+        const room = socket.room;
+        if (!room || !rooms[room]) return;
+
+        rooms[room] = rooms[room].filter(id => id !== socket.id);
+
+        socket.to(room).emit('user-disconnected', socket.id);
+    });
 });
 
-// Запускаем сервер на порту 3000
-http.listen(3000, () => {
-    console.log('Голосовой чат работает! Открой http://localhost:3000');
+server.listen(3000, () => {
+    console.log('Server running on http://localhost:3000');
 });
